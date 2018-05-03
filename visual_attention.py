@@ -50,9 +50,14 @@ class DeconvNet:
 
         for batch_idx in range(0,self.mini_batch_size):
             I = io.imread("data/train/images/salMap_{:05d}.jpg".format((steps*self.mini_batch_size) + batch_idx))
+            I = [ [(i/1.0) for i in j ] for j in I]
+
             X.append(I)
 
             labels = io.imread("data/train/salMap/salMap_{:05d}.jpg".format((steps*self.mini_batch_size) + batch_idx))[:,:,0]
+
+            labels = [ [(i/255.0) for i in j ] for j in labels]
+
             Y.append(labels)
 
         return X,Y
@@ -74,6 +79,27 @@ class DeconvNet:
                 X_train, Y_train = self.dataLoadBatch(steps)
 
                 self.train_step.run(session=self.session, feed_dict={self.x: [X_train][0], self.y: [Y_train][0], self.rate: learning_rate})
+
+                print(self.logits_1.eval(session=self.session, feed_dict={self.x: [X_train][0], self.y: [Y_train][0]} ))
+                print("****************************************************************************************************")
+
+                print(self.labels.eval(session=self.session, feed_dict={self.x: [X_train][0], self.y: [Y_train][0]} ))
+                print("****************************************************************************************************")
+
+                print(self.x.eval(session=self.session, feed_dict={self.x: [X_train][0], self.y: [Y_train][0]} ))
+                print("****************************************************************************************************")
+
+                print(self.y.eval(session=self.session, feed_dict={self.x: [X_train][0], self.y: [Y_train][0]} ))
+                print("****************************************************************************************************")
+
+                print(self.conv_1_1.eval(session=self.session, feed_dict={self.x: [X_train][0], self.y: [Y_train][0]} ))
+                print("****************************************************************************************************")
+
+                print(self.attention1c.eval(session=self.session, feed_dict={self.x: [X_train][0], self.y: [Y_train][0]} ))
+                print("****************************************************************************************************")
+
+
+                #print(labels.eval(session=self.session))
 
                 if steps % 10 == 0:
 
@@ -99,17 +125,17 @@ class DeconvNet:
 
         with tf.device(device):
             self.x = tf.placeholder(tf.float32, shape=(None, None, None, 3))
-            self.y = tf.placeholder(tf.int64, shape=(None, None, None))
+            self.y = tf.placeholder(tf.float32, shape=(None, None, None))
             expected = tf.expand_dims(self.y, -1)
             self.rate = tf.placeholder(tf.float32, shape=[])
 
             #CONVOLUTIONAL NETWORK 1 - ##########################################################################
             #Lr multiplier of 1 for filter and 2 for bais
             padded_input_x= self.pad_layer(self.x, [[0, 0], [35, 35], [35, 35], [0, 0]])
-            conv_1_1 = self.conv_layer(padded_input_x, [3, 3, 3, 64], 64, 'conv_1_1' ,padding = 'VALID')
+            self.conv_1_1 = self.conv_layer(padded_input_x, [3, 3, 3, 64], 64, 'conv_1_1' ,padding = 'VALID')
 
             #Lr multiplier of 1 for filter and 2 for bais
-            padded_input_conv_1_1= self.pad_layer(conv_1_1, [[0, 0], [1, 1], [1, 1], [0, 0]])
+            padded_input_conv_1_1= self.pad_layer(self.conv_1_1, [[0, 0], [1, 1], [1, 1], [0, 0]])
             conv_1_2 = self.conv_layer(padded_input_conv_1_1, [3, 3, 64, 64], 64, 'conv_1_2',padding = 'VALID')
 
             pool_1, pool_1_argmax = self.pool_layer(conv_1_2) #Pool layer with stride 2 decreases te size by 2
@@ -190,7 +216,7 @@ class DeconvNet:
             #ATTENTION 1 - PRED
             #Lr multiplier of 1,decay multipler is 1 for filter and Lr multiplier of 2, decay multipler is 0 for bais
             attention1 =self.conv_layer(derelu5_4, W_shape=[3,3,64,1], b_shape=1, name='attention', padding = 'VALID')
-            attention1c = self.crop_layer(attention1,self.x) #Crop layer with stackoverflow code. :P
+            self.attention1c = self.crop_layer(attention1,self.x) #Crop layer with stackoverflow code. :P
 
             #UP NETWORK 2- ###########################################################################
 
@@ -227,25 +253,26 @@ class DeconvNet:
             attention3c = self.crop_layer(attention3,self.x) #Crop layer with stackoverflow code. :P
 
             ### Concat and multiscale weight layer - ALONG NUM CHANNEL DIMENSION as per prototext###
-            attention = tf.concat([attention1c, attention2c, attention3c], axis=3)
+            attention = tf.concat([self.attention1c, attention2c, attention3c], axis=3)
 
             #Lr multiplier of 1,decay multipler is 1 for filter and Lr multiplier of 2, decay multipler is 0 for bais
             padded_attention = self.pad_layer(attention, [[0, 0], [1, 1], [1, 1], [0, 0]])
             final_attention = self.conv_layer(padded_attention, W_shape=[3,3,3,1], b_shape=1, name='final_attention',padding = 'VALID')
 
             ### Loss
-            logits_1 = tf.reshape(attention1c, (-1, 1))
+
+            self.logits_1 = tf.reshape(self.attention1c, (-1, 1))
             logits_2 = tf.reshape(attention2c, (-1, 1))
             logits_3 = tf.reshape(attention3c, (-1, 1))
             logits_attention = tf.reshape(final_attention, (-1, 1))
 
-            labels = tf.reshape(expected, (-1,1))
-            labels = tf.cast(labels, tf.float32)
+            self.labels = tf.reshape(expected, (-1,1))
+            #labels = tf.cast(labels, tf.float32)
 
-            self.loss_1 = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits_1)
-            self.loss_2 = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits_2)
-            self.loss_3 = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits_3)
-            self.loss_attention = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits_attention)
+            self.loss_1 = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=self.logits_1)
+            self.loss_2 = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=logits_2)
+            self.loss_3 = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=logits_3)
+            self.loss_attention = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=logits_attention)
 
             #self.prediction = tf.argmax(tf.reshape(tf.nn.softmax(logits_attention), tf.shape(final_attention)), dimension=1)
 
@@ -260,7 +287,7 @@ class DeconvNet:
                 #tf.summary.scalar('loss_combined', tf.sqrt(tf.reduce_mean(tf.square(self.loss))))
 
             with tf.name_scope('train'):
-                self.train_step = tf.train.GradientDescentOptimizer(self.rate).minimize(self.loss_attention)
+                self.train_step = tf.train.GradientDescentOptimizer(self.rate).minimize(self.loss)
 
             self.merged = tf.summary.merge_all()
 
